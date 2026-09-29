@@ -671,15 +671,12 @@ function initGate() {
     input.disabled = true;
     $('#pinBtn').disabled = true;
 
-    // نتحقق على السيرفر — لازم نتأكد إن الرمز صح فعلاً
+    // نتحقق على السيرفر — نقطة خفيفة ما بتلمس Google، فالرد فوري
     try {
-      const res = await fetch('/api/ai', {
+      const res = await fetch('/api/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-pin': val },
-        body: JSON.stringify({
-          task: 'question',
-          payload: { title: 'فحص الرمز', options: ['أ', 'ب'] },
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: val }),
       });
 
       if (res.status === 401) {
