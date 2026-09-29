@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1a1526">
+  <meta name="theme-color" content="#141020">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-separator" content="transparent">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="description" content="رتّب خياراتك، شوف الفرق بوضوح. بدون ما أحد يقرر عنك.">
+  <meta name="description" content="احكي عن قرارك، وبشوف معك الفرق بوضوح. بدون ما أحد يقرر عنك.">
   <title>قراراتي</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -15,11 +16,12 @@
 </head>
 <body>
 
+<!-- ═══════ بوابة الرمز ═══════ -->
 <div id="gate" class="gate hidden">
   <div class="gate-box">
     <div class="gate-logo">⚖️</div>
     <h1>قراراتي</h1>
-    <p class="gate-sub">رتّب خياراتك وشوف الفرق بوضوح.<br>بدون ما أحد يقرر عنك.</p>
+    <p class="gate-sub">احكي عن قرارك، وبشوف معك الفرق.<br>بس ما بقرر عنك.</p>
     <input type="password" id="pinInput" inputmode="numeric" maxlength="4"
            placeholder="أدخل الرمز" autocomplete="off">
     <button id="pinBtn" class="btn-primary">فتح</button>
@@ -27,142 +29,53 @@
   </div>
 </div>
 
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">⚖️</span>
-    <span>قراراتي</span>
+<!-- ═══════ الشات ═══════ -->
+<div id="chat" class="chat hidden">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">⚖️</span>
+      <span>قراراتي</span>
+    </div>
+    <button id="btnNew" class="btn-ghost btn-sm" title="محادثة جديدة">＋ جديد</button>
+  </header>
+
+  <main id="stream" class="stream" aria-live="polite"></main>
+
+  <!-- أمثلة جاهزة بتظهر أول مرة بس -->
+  <div id="starters" class="starters hidden">
+    <p class="starters-label">جرّبي تكتب:</p>
+    <div class="starters-row">
+      <button class="starter" data-s="محتار بين وظيفتين: الأولى قريبة وراتبها متوسط ودوامها مريح، والثانية راتبها ممتاز بس بعيدة وشفتاتها طويلة.">بين وظيفتين</button>
+      <button class="starter" data-s="لرح سافر على مدينة ثانية بس حاسس حالي مرتاح بمدينتي">بين مدينتين</button>
+      <button class="starter" data-s="بفكر أشتري سيارة ولا أضل أواصل قولب باص.">مركبة ولا مواصلات</button>
+    </div>
   </div>
-  <button id="btnNew" class="btn-ghost">+ قرار جديد</button>
-</header>
 
-<main id="app" class="hidden">
-
-  <!-- ═══════ شاشة السجل ═══════ -->
-  <section id="view-list" class="view">
-    <div id="emptyState" class="empty">
-      <div class="empty-mark">⚖️</div>
-      <h2>ما في قرارات محفوظة</h2>
-      <p>لما تحتار بين خيارين، افتح قرار جديد.<br>التطبيق بيرتّب المعلومات وبيساعدك تشوف الفرق.</p>
-      <button class="btn-primary" data-action="new">ابدأ قرار</button>
+  <footer class="composer">
+    <div class="composer-inner">
+      <textarea id="input" rows="1" placeholder="احكي عن قرارك…" autocomplete="off"></textarea>
+      <button id="send" class="send" aria-label="إرسال">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             stroke-linejoin="round" aria-hidden="true">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+      </button>
     </div>
-    <div id="historyList" class="history"></div>
-  </section>
+    <p class="composer-note">ما بقدر أقترح عليك خيار — بشوف الفرق بس.</p>
+  </footer>
+</div>
 
-  <!-- ═══════ شاشة الإنشاء ═══════ -->
-  <section id="view-new" class="view hidden">
-    <div class="card">
-      <label class="field">
-        <span class="label">شو القرار؟</span>
-        <input type="text" id="inTitle" placeholder="مثال: أقبل العرض الوظيفي؟">
-      </label>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h3>الخيارات</h3>
-        <span class="hint">قارني بين خيارين أو أكثر</span>
-      </div>
-      <div id="optionsWrap" class="options-wrap"></div>
-      <button id="addOption" class="btn-ghost btn-block">+ خيار ثالث</button>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h3>المعايير</h3>
-        <span class="hint">شو يهمّك في هذا القرار؟</span>
-      </div>
-      <div id="criteriaWrap" class="criteria-wrap"></div>
-      <div class="row gap">
-        <input type="text" id="inCriterion" placeholder="اكتب معيار…" class="grow">
-        <button id="addCriterion" class="btn-soft">إضافة</button>
-      </div>
-      <div class="ai-row">
-        <button id="btnSuggest" class="btn-ai">
-          <span class="dot"></span>اقتراح معايير ناقصة
-        </button>
-      </div>
-      <div id="newAiOut" class="ai-out"></div>
-    </div>
-
-    <div class="card">
-      <h3>تفاصيل كل خيار</h3>
-      <p class="hint">اكتبي اللي تعرفينه. الذكاء الاصطناعي بينظّمه بعدين.</p>
-      <div id="notesWrap" class="notes-wrap"></div>
-    </div>
-
-    <button id="btnAnalyze" class="btn-primary btn-block btn-lg">
-      حلّل وقارن
-    </button>
-  </section>
-
-  <!-- ═══════ شاشة النتيجة ═══════ -->
-  <section id="view-result" class="view hidden">
-    <div class="card result-head">
-      <button id="btnBack" class="btn-ghost btn-sm">رجوع</button>
-      <h2 id="resultTitle"></h2>
-    </div>
-
-    <!-- شريط الفرق -->
-    <div class="card">
-      <div class="card-head">
-        <h3>النتيجة الموزونة</h3>
-        <span id="completePill" class="pill"></span>
-      </div>
-      <div id="barsWrap" class="bars"></div>
-      <p class="disclaimer">
-        الفرق رقم وصفي فقط — هذا ليس ترشيحاً. القرار لكِ.
-      </p>
-    </div>
-
-    <!-- حساسية النتيجة -->
-    <div class="card">
-      <h3>شو بيحسم القرار؟</h3>
-      <p class="hint">لما خفّضنا أهمية معيار للنصف، هل رتّب الخيارات بينقلب؟</p>
-      <div id="sensitivityWrap" class="sensitivity"></div>
-    </div>
-
-    <!-- التقييم -->
-    <div class="card">
-      <div class="card-head">
-        <h3>جدول التقييم</h3>
-        <span class="hint">حرّكي الأوزان، الأرقام بتتغيّر فوراً</span>
-      </div>
-      <div id="matrixWrap" class="matrix"></div>
-    </div>
-
-    <!-- أزرار الذكاء الاصطناعي -->
-    <div class="card ai-card">
-      <h3>مساعدة بذكاء اصطناعي</h3>
-      <p class="hint">يرتّب معلوماتك. لا يقرّر عنك.</p>
-      <div class="ai-grid">
-        <button data-ai="analysis" class="btn-ai">حلل الفروق</button>
-        <button data-ai="question"  class="btn-ai">اسألني سؤالاً</button>
-        <button data-ai="balance"   class="btn-ai">اكشف عدم التوازن</button>
-        <button data-ai="criteria"  class="btn-ai">معايير ناقصة</button>
-      </div>
-      <div id="aiOut" class="ai-out"></div>
-    </div>
-
-    <div class="actions">
-      <button id="btnSave" class="btn-primary btn-block">حفظ القرار</button>
-      <button id="btnDelete" class="btn-danger btn-block">حذف</button>
-    </div>
-  </section>
-
-</main>
-
-<div id="toast" class="toast"></div>
-<div id="busy" class="busy hidden"><div class="spinner"></div><span id="busyText">ثانية واحدة…</span></div>
+<div id="toast" class="toast" role="status"></div>
 
 <script src="app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
-    // ?v=<رقم> كسر التخزين المؤقت لسوسيقى: بدونه، المتصفح بيحتفظ
-    // بنسخة sw.js القديمة وما بشوف تغييراتنا أبداً.
+    // ?v=<رقم> كسر التخزين المؤقت: بدونه المتصفح بيحتفظ بنسخة
+    // sw.js القديمة وما بشوف تغييراتنا أبداً.
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js?v=2').then((reg) => {
-        // لو في نسخة جديدة، خبّر الـ worker يبلّش فوراً بدل ما ينتظر
-        // إغلاق كل التبويبات.
+      navigator.serviceWorker.register('sw.js?v=3').then((reg) => {
         reg.addEventListener('updatefound', () => {
           const sw = reg.installing;
           if (sw) sw.addEventListener('statechange', () => {

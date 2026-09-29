@@ -1,724 +1,391 @@
 /**
- * app.js — واجهة «قراراتي»
+ * app.js — واجهة «قراراتي»: الشات.
  *
- * مبدأ التصميم: التطبيق يعرض أرقام ومعلومات فقط.
- * ما في أي نص بيقول "الأفضل" أو "اختاري" — الكود نفسه يمنع ذلك.
+ * فلسفة الشات: المستخدم ما بيملأ نماذج. بيتكلم بالعادي، والموديل
+ * بيستخرج الخيارات والمعايير والأوزان في الخلفية، وبيولّد بطاقة تحليل.
+ *
+ * ثلاث قواعد ما بنكسرها:
+ * 1. ما في توصية أبداً — الفلاتر على السيرفر أي توجّه يتمسح قبل ما يوصلك.
+ * 2. كل شي محلي — السجل في localStorage، والمفتاح ما بيوصل للتليفون.
+ * 3. لو الرد ما رجّع، لازم نخلي كل شي ينتهي برسالة واضحة وزر محاولة.
  */
+(() => {
+  'use strict';
 
-'use strict';
+  // ═══════════ أدوات صغيرة ═══════════
 
-// ═══════════ التخزين المحلي ═══════════
-// كل البيانات على جهازها فقط. ما في سيرفر بيحفظ قراراتها.
-const STORE_KEY = 'qararati.decisions.v1';
-const PIN_KEY = 'qararati.pin.v1';
-
-let PIN = '';   // الرمز، يُرسل مع كل طلب كـ header
-
-const store = {
-  all() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
-    catch { return []; }
-  },
-  save(list) {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(list)); }
-    catch (e) { console.warn('تعذّر الحفظ', e); }
-  },
-  upsert(d) {
-    const list = this.all();
-    const i = list.findIndex((x) => x.id === d.id);
-    if (i === -1) list.unshift(d); else list[i] = d;
-    this.save(list);
-  },
-  remove(id) {
-    this.save(this.all().filter((x) => x.id !== id));
-  },
-  get(id) { return this.all().find((x) => x.id === id); },
-};
-
-const uid = () => Math.random().toString(36).slice(2, 10);
-
-// ═══════════ الحالة ═══════════
-let state = null;   // القرار الحالي قيد العمل
-let editingId = null;
-
-// ═══════════ أدوات مساعدة ═══════════
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
-// بنبحث جوه عنصر معيّن بدل الصفحة كلها — بنحتاجها لما نرسم
-// النتائج بمكان متغيّر (شاشة الإنشاء vs شاشة النتيجة).
-const within = (root, sel) => {
-  const el = typeof root === 'string' ? document.querySelector(root) : root;
-  return el ? el.querySelectorAll(sel) : [];
-};
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-  );
-}
-
-let toastTimer;
-function toast(msg) {
-  const el = $('#toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
-}
-
-function busy(on, text) {
-  $('#busy').classList.toggle('hidden', !on);
-  if (text) $('#busyText').textContent = text;
-}
-
-function showView(name) {
-  for (const v of ['list', 'new', 'result']) {
-    $('#view-' + v).classList.toggle('hidden', v !== name);
-  }
-  window.scrollTo(0, 0);
-}
-// ═══════════ منطق الحساب (نفس lib/scoring.js، نسخة المتصفح) ═══════════
-
-const clamp = (n, min, max) => {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return min;
-  return Math.min(max, Math.max(min, x));
-};
-
-function scoreOption(optionId, criteria, scores) {
-  const active = criteria.filter((c) => c.weight > 0);
-  if (!active.length) return 0;
-  const totalWeight = active.reduce((s, c) => s + c.weight, 0);
-  const weighted = active.reduce((s, c) => {
-    const raw = scores?.[optionId]?.[c.id];
-    return s + clamp(raw ?? 0, 0, 10) * c.weight;
-  }, 0);
-  return weighted / totalWeight;
-}
-
-function scoreAll(decision) {
-  const results = decision.options.map((o) => ({
-    id: o.id,
-    name: o.name,
-    score: scoreOption(o.id, decision.criteria, decision.scores),
-  }));
-  results.sort((a, b) => b.score - a.score);
-  return results;
-}
-
-const gapOf = (results) => (results.length < 2 ? 0 : results[0].score - results[1].score);
-
-function sensitivity(decision) {
-  const base = scoreAll(decision);
-  const baseOrder = base.map((r) => r.id).join('|');
-  const influential = [];
-  for (const c of decision.criteria) {
-    if (c.weight <= 0) continue;
-    const halved = decision.criteria.map((x) =>
-      x.id === c.id ? { ...x, weight: x.weight / 2 } : x
+  const $ = (s, r = document) => r.querySelector(s);
+  const within = (root, sel) => {
+    const el = typeof root === 'string' ? document.querySelector(root) : root;
+    return el ? el.querySelectorAll(sel) : [];
+  };
+  const uid = () => Math.random().toString(36).slice(2, 10);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const esc = (s) =>
+    String(s ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
     );
-    const trial = scoreAll({ ...decision, criteria: halved });
-    if (trial.map((r) => r.id).join('|') !== baseOrder) {
-      influential.push({
-        criterionId: c.id,
-        name: c.name,
-        message: `لو خفّضت أهمية «${c.name}» للنصف، رتّب الخيارات بينقلب.`,
-      });
+  // نص معروض: متهرّب + معالَج اتجاه. ما بنستخدمه مع HTML جاهز.
+  const txt = (s) => bidi(esc(s));
+
+  // نخلي الأرقام إنكليزية عادية — أسهل للعين من الأرقام العربية
+  /**
+   * كلمة لاتينية وسط نص عربي بتكسر الفقرة (bidi): علامات الترقيم بتطيح
+   * بالبداية. منلصّقو ب-directions لنص صريح يحلّها.
+   */
+  function bidi(s) {
+    return String(s ?? '').replace(
+      /([A-Za-z][A-Za-z'\u2019\-.]*)/g,
+      '<bdi style="display:inline">$1</bdi>'
+    );
+  }
+
+  const PIN_KEY = 'qararati_pin';
+  const LOG_KEY = 'qararati_chat_v1';
+  const CTX_KEY = 'qararati_ctx_v1';
+
+  let PIN = sessionStorage.getItem(PIN_KEY) || '';
+  let sending = false;
+
+  /** آخر سياق محفوظ — بيكمل من وين ما وقفنا */
+  let ctx = load(CTX_KEY, null);
+  const history = load(LOG_KEY, []);
+
+  function load(k, fallback) {
+    try {
+      const v = localStorage.getItem(k);
+      return v ? JSON.parse(v) : fallback;
+    } catch {
+      return fallback;
     }
   }
-  return { influential, orderChanged: influential.length > 0 };
-}
-
-function completeness(decision) {
-  let done = 0;
-  const total = decision.options.length * decision.criteria.length;
-  for (const o of decision.options)
-    for (const c of decision.criteria)
-      if (decision.scores?.[o.id]?.[c.id] != null) done++;
-  return { done, total, ratio: total ? done / total : 0 };
-}
-
-const AR_DIGITS = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
-
-/** يحوّل رقم لنص عربي: 5.5 → ٥٫٥ */
-function arNum(n, decimals = 1) {
-  const fixed = Number(n).toFixed(decimals);
-  return fixed.replace(/[0-9]/g, (d) => AR_DIGITS[+d]).replace('.', '٫');
-}
-
-const AR_LETTERS = ['أ', 'ب', 'ج', 'د', 'هـ', 'و'];
-// ═══════════ عرض النتائج ═══════════
-
-function renderBars() {
-  const results = scoreAll(state);
-  const letters = {};
-  state.options.forEach((o, i) => { letters[o.id] = AR_LETTERS[i] || '؟'; });
-
-  $('#barsWrap').innerHTML = results.map((r) => {
-    const idx = state.options.findIndex((o) => o.id === r.id);
-    const cls = ['a', 'b', 'c'][idx] || 'a';
-    return `
-      <div class="bar-item">
-        <div class="bar-top">
-          <span class="bar-name">${esc(letters[r.id])} · ${esc(r.name || 'بلا اسم')}</span>
-          <span class="bar-val">${arNum(r.score)}</span>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill ${cls}" data-w="${(r.score * 10).toFixed(0)}"></div>
-        </div>
-      </div>`;
-  }).join('');
-
-  // نترك المتصفح يرسم ثم نحرّك العرض — يعطي أنيميشن ناعم
-  requestAnimationFrame(() => {
-    $$('#barsWrap .bar-fill').forEach((el) => { el.style.width = el.dataset.w + '%'; });
-  });
-
-  const g = gapOf(results);
-  const wrap = $('#barsWrap').parentElement;
-  let note = wrap.querySelector('.gap-note');
-  if (g >= 0.15) {
-    const txt = `الفارق بين الأوّل والثاني ${arNum(g)} نقطة من ١٠ — فرق ${g < 1 ? 'صغير' : g < 2.5 ? 'متوسط' : 'واضح'}.`;
-    if (note) { note.textContent = txt; }
-    else {
-      note = document.createElement('div');
-      note.className = 'gap-note';
-      note.textContent = txt;
-      $('#barsWrap').after(note);
+  function save(k, v) {
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch {
+      /* الذاكرة ممتلئة — ما بنكسر الشات */
     }
-  } else if (note) {
-    note.textContent = 'الخيارات متقاربة جداً — الفرق أقل من ٠.١ نقطة.';
-  }
-}
-
-function renderSensitivity() {
-  const s = sensitivity(state);
-  const el = $('#sensitivityWrap');
-  if (state.criteria.length < 2) {
-    el.innerHTML = '<div class="sens-ok">أضيفي معيارين على الأقل لنقدر نتحسّس أثر الأوزان على النتيجة.</div>';
-    return;
-  }
-  if (!s.influential.length) {
-    el.innerHTML = '<div class="sens-ok">النتيجة متينّة: حتى لو خفّضت أهمية أي معيار للنصف، رتّب الخيارات ما بينقلب. يعني الخيارات متكافئة بوزن معاييرك الحالي.</div>';
-  } else {
-    el.innerHTML = s.influential.map((i) =>
-      `<div class="sens-item">${esc(i.message)}</div>`
-    ).join('');
-  }
-}
-
-function renderMatrix() {
-  const wrap = $('#matrixWrap');
-  if (!state.criteria.length) {
-        wrap.innerHTML = '<div class="empty-hint">أضيفي معايير حتى تقدري تقيّمي الخيارات.</div>';
-    return;
-  }
-  wrap.innerHTML = state.criteria.map((c) => {
-    const rows = state.options.map((o, i) => {
-      const v = state.scores?.[o.id]?.[c.id] ?? 5;
-      const cls = ['a', 'b', 'c'][i] || 'a';
-      const accent = cls === 'b' ? 'accent-2' : 'accent';
-      return `
-        <div class="mx-row">
-          <span class="mx-label">${esc(AR_LETTERS[i] || '؟')} · ${esc(o.name || '—')}</span>
-          <input type="range" class="mx-slider" min="0" max="10" step="1"
-                 value="${v}" data-score="${o.id}" data-crit="${c.id}"
-                 style="accent-color: var(--${accent})">
-          <span class="mx-val" data-val-for="${o.id}-${c.id}">${arNum(v, 0)}</span>
-        </div>`;
-    }).join('');
-
-    return `
-      <div class="mx-crit">
-        <div class="mx-crit-name"><span>${esc(c.name)}</span></div>
-        ${rows}
-        <div class="mx-weight">
-          <span>الأهمية</span>
-          <input type="range" min="0" max="10" step="1" value="${c.weight}" data-weight="${c.id}">
-          <span class="crit-w">${arNum(c.weight, 0)}</span>
-        </div>
-      </div>`;
-  }).join('');
-  bindMatrix();
-}
-// ═══════════ ربط المصفوفة (تحديث حي) ═══════════
-
-function bindMatrix() {
-  $$('#matrixWrap input[data-score]').forEach((el) => {
-    el.addEventListener('input', () => {
-      const { score: optId, crit } = el.dataset;
-      state.scores[optId] = state.scores[optId] || {};
-      state.scores[optId][crit] = Number(el.value);
-      const label = $(`#matrixWrap [data-val-for="${optId}-${crit}"]`);
-      if (label) label.textContent = arNum(el.value, 0);
-      renderBars();
-      renderSensitivity();
-    });
-  });
-
-  $$('#matrixWrap input[data-weight]').forEach((el) => {
-    el.addEventListener('input', () => {
-      const c = state.criteria.find((x) => x.id === el.dataset.weight);
-      if (!c) return;
-      c.weight = Number(el.value);
-      const pill = el.nextElementSibling;
-      if (pill && pill.classList.contains('crit-w')) pill.textContent = arNum(c.weight, 0);
-      renderBars();
-      renderSensitivity();
-    });
-  });
-}
-
-// ═══════════ عرض نتائج الذكاء الاصطناعي ═══════════
-
-function renderAI(task, data, out, onNew = false) {
-  if (!out) out = $('#aiOut');
-
-  if (task === 'criteria') {
-    const list = data.criteria || [];
-    if (!list.length) { out.innerHTML = '<div class="ai-err">ما اقترح الذكاء الاصطناعي معايير جديدة.</div>'; return; }
-    out.innerHTML = `
-      <div class="ai-block">
-        <h4>معايير ممكن تضيفيها</h4>
-        <div class="ai-adds">
-          ${list.map((c) => `<button class="chip-add" data-add-crit="${esc(c)}">+ ${esc(c)}</button>`).join('')}
-        </div>
-      </div>`;
-    // ⚠️ لازم نربط على الحاوية اللي رُسم فيها، مو على #aiOut الثابت.
-    //Proposal chips على شاشة الإنشاء بتنرسم بـ #newAiOut، فإذا ربطنا
-    // على #aiOut كانو بيظهروا بس ما في handler عليهم = 버튼 ميّت.
-    within(out, '[data-add-crit]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        addCriterion(btn.dataset.addCrit);
-        btn.disabled = true;
-        btn.textContent = '✓ ' + btn.textContent.slice(2);
-        if (!onNew) renderMatrix();
-        toast('تمت الإضافة');
-      });
-    });
-    return;
   }
 
-  if (task === 'analysis') {
-    const blocks = (data.options || []).map((o) => {
-      const pros = (o.pros || []).map((p) => `<li>${esc(p)}</li>`).join('');
-      const cons = (o.cons || []).map((c) => `<li class="ai-cons">${esc(c)}</li>`).join('');
-      return `
-        <div class="ai-block">
-          <h4>${esc(o.name || 'خيار')}</h4>
-          ${pros ? `<ul>${pros}</ul>` : ''}
-          ${cons ? `<ul>${cons}</ul>` : ''}
-        </div>`;
-    }).join('');
-    const notes = data.notes ? `<div class="ai-block"><h4>الفرق الجوهري</h4><p class="ai-notes">${esc(data.notes)}</p></div>` : '';
-    out.innerHTML = blocks + notes;
-    return;
-  }
+  // ═══════════ التنقّل ═══════════
 
-  if (task === 'question') {
-    out.innerHTML = `<div class="ai-block"><h4>سؤال للتفكير</h4><div class="q">${esc(data.question || '')}</div></div>`;
-    return;
-  }
-
-  if (task === 'balance') {
-    if (data.balanced) {
-      out.innerHTML = '<div class="ai-block"><h4>التوازن</h4><div class="sens-ok">تحليلك متوازن بين الخيارين.</div></div>';
-    } else {
-      const items = (data.findings || []).map((f) => `<li>${esc(f)}</li>`).join('');
-      out.innerHTML = `<div class="ai-block"><h4>ملاحظات على التوازن</h4><ul>${items}</ul></div>`;
-    }
-    return;
-  }
-}
-// __JS_NEXT__ */
-
-
-
-// ═══════════ استدعاء الذكاء الاصطناعي ═══════════
-
-/**
- * @param {string} task       اسم المهمة
- * @param {object} payload    البيانات
- * @param {Element} out       الحاوية اللي بنكتب فيها النتيجة
- * @param {boolean} onNew     إذا كانت العملية على شاشة الإنشاء
- */
-async function callAI(task, payload, out, onNew = false) {
-  // ليش الحاوية جايبة كمعامل: زر «اقتراح معايير» موجود على شاشة
-  // الإنشاء، وما في #aiOut هناك (دي بشاشة النتيجة). فلو كتبنا دايماً
-  // بـ $('#aiOut') كان الرد بينكتب بعنصر مخفي وما بتظهر النتيجة أبداً.
-
-  const buttons = $$('[data-ai], #btnSuggest');
-  buttons.forEach((b) => (b.disabled = true));
-  busy(true, 'عم يفكّر… (حتى ٢٠ ثانية)');
-
-  // بنعطي المتصفح مهلة ٣٥ ثانية. لو ما رد، بنلغي الطلب بدل ما
-  // نخلي المستخدم يقعد ينطر على شاشة ما بتتغير.
-  const ctl = new AbortController();
-  const kill = setTimeout(() => ctl.abort(), 35000);
-
-  try {
-    const res = await fetch('/api/ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-pin': PIN },
-      body: JSON.stringify({ task, payload }),
-      signal: ctl.signal,
-    });
-    const json = await res.json();
-
-    if (res.status === 401) {
-      sessionStorage.removeItem(PIN_KEY);
-      PIN = '';
-      toast('انتهت الجلسة. أدخلي الرمز من جديد.');
-      return;
-    }
-    if (json.ok) {
-      renderAI(task, json.data, out, onNew);
-    } else {
-      showAIFail(out, json.message, task, payload, onNew);
-    }
-  } catch (err) {
-    if (err && err.name === 'AbortError') {
-      showAIFail(out, 'الخدمة بطيئة اليوم. جدول المقارنة كامل وشغّال بدونها.', task, payload, onNew);
-    } else {
-      showAIFail(out, 'ما قدرنا نوصل للخدمة. تأكدي من الإنترنت.', task, payload, onNew);
-    }
-  } finally {
-    clearTimeout(kill);
-    busy(false);
-    buttons.forEach((b) => (b.disabled = false));
-  }
-}
-
-/**
- * عند فشل الذكاء الاصطناعي: بنعرض الرسالة + زر «حاول تاني».
- * وقتها بنعرض السبب الحقيقي للمستخدم مع زر لإعادة المحاولة،
- * بدل رسالة ميتة ما فيها حل.
- */
-function showAIFail(out, message, task, payload, onNew = false) {
-  out.innerHTML =
-    '<div class="ai-err">' + esc(message || 'الخدمة مشغولة مؤقتاً.') + '</div>' +
-    '<button class="ai-retry" data-retry="' + esc(task) + '">حاول تاني</button>';
-  const btn = out.querySelector('[data-retry]');
-  if (btn) {
-    btn.addEventListener('click', () => callAI(task, payload, out, onNew));
-  }
-}
-
-function buildPayload() {
-  return {
-    title: state.title,
-    options: state.options.map((o) => ({
-      name: o.name,
-      notes: o.notes || '',
-    })),
-    criteria: state.criteria.map((c) => c.name),
-  };
-}
-
-// ═══════════ نموذج الإنشاء ═══════════
-
-function addOption(name) {
-  state.options.push({ id: uid(), name: name || '', notes: '' });
-  renderNew();
-}
-
-function addCriterion(name) {
-  const n = String(name || '').trim();
-  if (!n) return;
-  if (state.criteria.some((c) => c.name === n)) { toast('هذا المعيار موجود'); return; }
-  state.criteria.push({ id: uid(), name: n, weight: 5 });
-  renderNew();
-}
-
-function renderNew() {
-  $('#inTitle').value = state.title;
-
-  // الخيارات
-  $('#optionsWrap').innerHTML = state.options.map((o, i) => {
-    const cls = ['a', 'b', 'c'][i] || 'a';
-    const letter = AR_LETTERS[i] || '؟';
-    const canDel = state.options.length > 2;
-    return `
-      <div class="opt-input" data-opt="${o.id}">
-        <span class="opt-chip ${cls}">${letter}</span>
-        <input type="text" value="${esc(o.name)}" data-opt-name="${o.id}"
-               placeholder="الخيار ${letter}">
-        ${canDel ? `<button class="opt-del" data-opt-del="${o.id}" aria-label="حذف">×</button>` : ''}
-      </div>`;
-  }).join('');
-
-  // المعايير
-  $('#criteriaWrap').innerHTML = state.criteria.length
-    ? state.criteria.map((c) => `
-        <div class="crit" data-crit="${c.id}">
-          <span class="crit-name">${esc(c.name)}</span>
-          <span class="crit-w" data-crit-w="${c.id}">${c.weight}</span>
-          <button class="crit-del" data-crit-del="${c.id}" aria-label="حذف">×</button>
-        </div>`).join('')
-    : '<div class="empty-hint">لم تُضف معايير بعد. فكّري: شو أكثر شي يهمّك؟</div>';
-
-  // الملاحظات
-  $('#notesWrap').innerHTML = state.options.map((o, i) => `
-    <div class="note-block">
-      <div class="note-head">
-        <span class="opt-chip ${['a','b','c'][i] || 'a'}" style="width:22px;height:22px;font-size:.75rem">${AR_LETTERS[i] || '؟'}</span>
-        <span>${esc(o.name || 'الخيار ' + (AR_LETTERS[i] || ''))}</span>
-      </div>
-      <textarea data-note="${o.id}" placeholder="اكتبي اللي تعرفينه عن هذا الخيار…">${esc(o.notes || '')}</textarea>
-    </div>`).join('');
-
-  bindNew();
-}
-
-function bindNew() {
-  $$('#optionsWrap input[data-opt-name]').forEach((el) => {
-    el.addEventListener('input', () => {
-      const o = state.options.find((x) => x.id === el.dataset.optName);
-      if (o) o.name = el.value;
-    });
-  });
-
-  $$('#optionsWrap [data-opt-del]').forEach((el) => {
-    el.addEventListener('click', () => {
-      state.options = state.options.filter((x) => x.id !== el.dataset.optDel);
-      state.scores = {};
-      renderNew();
-    });
-  });
-
-  $$('#notesWrap [data-note]').forEach((el) => {
-    el.addEventListener('input', () => {
-      const o = state.options.find((x) => x.id === el.dataset.note);
-      if (o) o.notes = el.value;
-    });
-  });
-
-  $$('#criteriaWrap [data-crit-del]').forEach((el) => {
-    el.addEventListener('click', () => {
-      state.criteria = state.criteria.filter((x) => x.id !== el.dataset.critDel);
-      renderNew();
-    });
-  });
-}
-
-// ═══════════ السجل ═══════════
-
-function renderHistory() {
-  const list = store.all();
-  $('#emptyState').classList.toggle('hidden', list.length > 0);
-  $('#historyList').classList.toggle('hidden', list.length === 0);
-
-  $('#historyList').innerHTML = list.map((d) => {
-    const when = new Date(d.updatedAt || d.createdAt).toLocaleDateString('ar', {
-      day: 'numeric', month: 'long', year: 'numeric',
-    });
-    const opts = (d.options || []).map((o, i) =>
-      `<span class="hist-opt">${AR_LETTERS[i] || '؟'} · ${esc(o.name || '—')}</span>`
-    ).join('');
-    return `
-      <button class="hist-item" data-open="${d.id}">
-        <div class="hist-title">${esc(d.title || 'قرار بدون عنوان')}</div>
-        <div class="hist-meta">${when} · ${(d.criteria || []).length} معيار</div>
-        <div class="hist-opts">${opts}</div>
-      </button>`;
-  }).join('');
-
-  $$('#historyList [data-open]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const d = store.get(el.dataset.open);
-      if (!d) return;
-      state = JSON.parse(JSON.stringify(d));
-      editingId = d.id;
-      $('#resultTitle').textContent = d.title || 'قرار';
-      $('#aiOut').innerHTML = '';
-      renderResult();
-    });
-  });
-}
-
-// ═══════════ عرض النتيجة ═══════════
-
-function renderResult() {
-  $('#resultTitle').textContent = state.title || 'قرار';
-
-  const c = completeness(state);
-  $('#completePill').textContent = c.total === 0
-    ? 'لا توجد معايير'
-    : arNum(c.done, 0) + ' من ' + arNum(c.total, 0);
-
-  renderBars();
-  renderSensitivity();
-  renderMatrix();
-  showView('result');
-}
-
-// ═══════════ نافذة البداية ═══════════
-
-function startNew() {
-  editingId = null;
-  state = {
-    id: uid(),
-    title: '',
-    options: [{ id: uid(), name: '', notes: '' }, { id: uid(), name: '', notes: '' }],
-    criteria: [],
-    scores: {},
-    createdAt: new Date().toISOString(),
-  };
-  $('#inCriterion').value = '';
-  $('#aiOut').innerHTML = '';
-  renderNew();
-  showView('new');
-}
-
-// ═══════════ ربط الأحداث العامة ═══════════
-
-function init() {
-  // شريط علوي + زر "ابدأ قرار" بالشاشة الفاضية
-  $('#btnNew').addEventListener('click', startNew);
-  $$('[data-action="new"]').forEach((b) => b.addEventListener('click', startNew));
-
-  // النموذج
-  $('#inTitle').addEventListener('input', (e) => { state.title = e.target.value; });
-
-  $('#addOption').addEventListener('click', () => addOption(''));
-
-  $('#addCriterion').addEventListener('click', () => {
-    addCriterion($('#inCriterion').value);
-    $('#inCriterion').value = '';
-  });
-
-  $('#inCriterion').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      addCriterion($('#inCriterion').value);
-      $('#inCriterion').value = '';
-    }
-  });
-
-  // اقتراح معايير أثناء الإنشاء
-  // نفس مسار callAI بالضبط — عشان الفشل يكون بنفس الشكل لكل المهام،
-  // ولما يفشل يقترح عليك تكتبي المعايير يدوي بدل ما يضل يقف.
-  $('#btnSuggest').addEventListener('click', () => {
-    if (!state.title && state.options.every((o) => !o.name)) {
-      toast('اكتبي عنوان القرار أو الخيارات أولاً');
-      return;
-    }
-    callAI('criteria', buildPayload(), $('#newAiOut'), true);
-  });
-
-  // تحويل لصفحة النتيجة
-  $('#btnAnalyze').addEventListener('click', () => {
-    const named = state.options.filter((o) => o.name.trim());
-    if (named.length < 2) { toast('اكتبي اسم خيارين على الأقل'); return; }
-    if (!state.criteria.length) { toast('أضيفي معيار واحد على الأقل'); return; }
-    state.options = named;
-    // نملأ الدرجات الناقصة بـ ٥ محايد
-    for (const o of state.options) {
-      state.scores[o.id] = state.scores[o.id] || {};
-      for (const cr of state.criteria) {
-        if (state.scores[o.id][cr.id] == null) state.scores[o.id][cr.id] = 5;
-      }
-    }
-    renderResult();
-  });
-
-  // أزرار الذكاء الاصطناعي في صفحة النتيجة
-  $$('[data-ai]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (state.criteria.length < 1) { toast('أضيفي معايير أولاً'); return; }
-      callAI(btn.dataset.ai, buildPayload(), $('#aiOut'));
-    });
-  });
-
-  // رجوع
-  $('#btnBack').addEventListener('click', () => { renderHistory(); showView('list'); });
-
-  // حفظ
-  $('#btnSave').addEventListener('click', () => {
-    if (!state.title.trim()) { toast('اكتبي عنوان القرار'); return; }
-    state.id = editingId || state.id;
-    state.updatedAt = new Date().toISOString();
-    store.upsert(state);
-    editingId = state.id;
-    toast('تم الحفظ');
-  });
-
-  // حذف
-  $('#btnDelete').addEventListener('click', () => {
-    if (!confirm('تحذير: حذف هذا القرار نهائياً؟')) return;
-    store.remove(state.id);
-    toast('تم الحذف');
-    renderHistory();
-    showView('list');
-  });
-
-  // بدء
-  renderHistory();
-  showView('list');
-}
-
-// ═══════════ بوابة الرمز (اختيارية) ═══════════
-
-function initGate() {
   const gate = $('#gate');
-  const app = $('#app');
+  const chat = $('#chat');
+  const stream = $('#stream');
+  const input = $('#input');
+  const sendBtn = $('#send');
+  const starters = $('#starters');
+  const toastEl = $('#toast');
 
-  // لو الرمز مخزّن من جلسة سابقة، نتحقق من صحته مع السيرفر
-  PIN = sessionStorage.getItem(PIN_KEY) || '';
-  if (PIN) {
-    gate.classList.add('hidden');
-    app.classList.remove('hidden');
-    init();
-    return;
+  function show(el) { el.classList.remove('hidden'); }
+  function hide(el) { el.classList.add('hidden'); }
+
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('on'), 2600);
   }
 
-  gate.classList.remove('hidden');
+  function scrollDown(smooth = true) {
+    requestAnimationFrame(() => {
+      stream.scrollTo({ top: stream.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    });
+  }
 
-  const input = $('#pinInput');
-  const err = $('#gateErr');
+  // ═══════════ بوابة الرمز ═══════════
+
+  function initGate() {
+    if (PIN) { open(); return; }
+    show(gate);
+    const pinInput = $('#pinInput');
+    $('#pinBtn').addEventListener('click', checkPin);
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkPin(); });
+    setTimeout(() => pinInput.focus(), 120);
+  }
 
   async function checkPin() {
-    const val = input.value.trim();
+    const val = pinInput_value();
+    const err = $('#gateErr');
     if (!val) { err.textContent = 'اكتبي الرمز'; return; }
-
     err.textContent = '';
-    input.disabled = true;
+    pinInput.disabled = true;
     $('#pinBtn').disabled = true;
 
-    // نتحقق على السيرفر — نقطة خفيفة ما بتلمس Google، فالرد فوري
     try {
+      // نقطة خفيفة ما بتلمس Google — الرد فوري
       const res = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: val }),
       });
-
       if (res.status === 401) {
         err.textContent = 'الرمز غير صحيح';
-        input.value = '';
-        input.focus();
+        pinInput.value = '';
+        pinInput.focus();
         return;
       }
       if (!res.ok) { err.textContent = 'تعذّر الاتصال. تأكدي من نت.'; return; }
-
-      // الرمز صح
       PIN = val;
       sessionStorage.setItem(PIN_KEY, val);
-      gate.classList.add('hidden');
-      app.classList.remove('hidden');
-      init();
+      open();
     } catch {
       err.textContent = 'تعذّر الاتصال. تأكدي من نت.';
     } finally {
-      input.disabled = false;
+      pinInput.disabled = false;
       $('#pinBtn').disabled = false;
     }
   }
 
-  $('#pinBtn').addEventListener('click', checkPin);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkPin(); });
-  setTimeout(() => input.focus(), 100);
-}
+  function pinInput_value() { return $('#pinInput').value.trim(); }
 
-// شغّل
-document.addEventListener('DOMContentLoaded', initGate);
+  function open() {
+    hide(gate);
+    show(chat);
+    if (!history.length) greet();
+    else renderAll();
+    $('#btnNew').addEventListener('click', newChat);
+    autoGrow();
+    input.focus();
+  }
+
+  // ═══════════ بناء الرسائل ═══════════
+
+  function greet() {
+    push('ai', {
+      html: `<p>هلا. احكيلي عن القرار اللي عم تفكر فيه — بالطريقة اللي بتحكيها، مش لازم يكون مرتب.</p>
+             <p class="dim">مثال: «محتار بين وظيفتين: الأولى قريبة وراتبها متوسط، والثانية راتبها ممتاز بس بعيدة.»</p>`,
+    });
+    show(starters);
+  }
+
+  function push(role, body) {
+    const msg = { id: uid(), role, ...body };
+    history.push(msg);
+    save(LOG_KEY, history);
+    stream.appendChild(bubble(msg));
+    scrollDown();
+    return msg;
+  }
+
+  function update(msg) {
+    const i = history.findIndex((m) => m.id === msg.id);
+    if (i > -1) history[i] = msg;
+    save(LOG_KEY, history);
+    const el = stream.querySelector(`[data-id="${msg.id}"]`);
+    if (el) el.replaceWith(bubble(msg));
+  }
+
+  function bubble(msg) {
+    const el = document.createElement('div');
+    el.className = `row ${msg.role}`;
+    el.dataset.id = msg.id;
+
+    if (msg.role === 'me') {
+      el.innerHTML = `<div class="bubble me-b">${txt(msg.text)}</div>`;
+      return el;
+    }
+
+    let inner = '';
+    if (msg.pending) {
+      inner = `<div class="typing"><i></i><i></i><i></i></div>`;
+    } else if (msg.html) {
+      inner = msg.html;
+    }
+    el.innerHTML = `<div class="bubble ai-b">${inner}</div>`;
+    return el;
+  }
+
+  function renderAll() {
+    stream.innerHTML = '';
+    history.forEach((m) => stream.appendChild(bubble(m)));
+    if (history.length) hide(starters);
+    scrollDown(false);
+  }
+
+  function newChat() {
+    if (sending) { toast('خلّيني أخلص هالرد'); return; }
+    if (!history.length) return;
+    history.length = 0;
+    ctx = null;
+    save(LOG_KEY, history);
+    save(CTX_KEY, ctx);
+    stream.innerHTML = '';
+    greet();
+  }
+
+  // ═══════════ بطاقة التحليل ═══════════
+
+  function card(a) {
+    const list = (a.tradeoffs || []).map((t) => `
+      <li>
+        <strong>${txt(t.point)}</strong>
+        ${t.detail ? `<p>${txt(t.detail)}</p>` : ''}
+        ${(t.impacts || []).length
+          ? `<span class="impacts">${t.impacts.map((i) => `<em>${txt(i)}</em>`).join('')}</span>`
+          : ''}
+      </li>`).join('');
+
+    const missing = (a.missing || []).length
+      ? `<div class="card-missing"><h5>لو عرفتِ هالشي كان قرارك أسهل</h5>
+           <ul>${a.missing.map((m) => `<li>${txt(m)}</li>`).join('')}</ul></div>`
+      : '';
+
+    return `
+      <div class="acard">
+        <p class="acard-sum">${txt(a.summary)}</p>
+
+        ${list ? `<div class="acard-sec">
+          <h5>وين الفرق الحقيقي</h5>
+          <ul class="tradeoffs">${list}</ul>
+        </div>` : ''}
+
+        <div class="acard-decide">
+          <span class="decide-label">نقطة الحسم</span>
+          <strong>${txt(a.decidingFactor)}</strong>
+          <p>${txt(a.decidingWhy)}</p>
+        </div>
+
+        ${missing}
+      </div>`;
+  }
+
+  // ═══════════ الاتصال بالموديل ═══════════
+
+  async function ask(task, payload) {
+    const ctl = new AbortController();
+    const kill = setTimeout(() => ctl.abort(), 40000);
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-pin': PIN },
+        body: JSON.stringify({ task, payload }),
+        signal: ctl.signal,
+      });
+
+      if (res.status === 401) {
+        PIN = '';
+        sessionStorage.removeItem(PIN_KEY);
+        show(gate);
+        hide(chat);
+        toast('انتهت الجلسة. أدخلي الرمز من جديد.');
+        return { ok: false, gone: true };
+      }
+      if (res.status === 413) return { ok: false, msg: 'الرسالة طويلة جداً. اختصرها شوي.' };
+      if (res.status === 429) return { ok: false, msg: 'طلبات كثيرة خلال وقت قصير. انتظر دقيقة.' };
+      return await res.json();
+    } catch (err) {
+      const slow = err && err.name === 'AbortError';
+      return {
+        ok: false,
+        msg: slow
+          ? 'الخدمة بطيئة اليوم. جرّبي كمان مرة.'
+          : 'ما قدرنا نوصل. تأكدي من الإنترنت.',
+      };
+    } finally {
+      clearTimeout(kill);
+    }
+  }
+
+  // ═══════════ إرسال رسالة ═══════════
+
+  async function submit(text) {
+    const t = String(text || '').trim();
+    if (!t) return;
+    if (sending) { toast('خلّيني أخلص هالرد'); return; }
+
+    hide(starters);
+    push('me', { text: t });
+    input.value = '';
+    autoGrow();
+
+    sending = true;
+    sendBtn.disabled = true;
+    const pending = push('ai', { pending: true });
+
+    try {
+      // أول رسالة = استخراج + تحليل. بعدها = محادثة.
+      if (!ctx || !ctx.options) {
+        const parsed = await ask('parse', { text: t });
+        if (!parsed.ok) { fail(pending, parsed.msg); return; }
+
+        if (!parsed.data.options || parsed.data.options.length < 2) {
+          update(finish(pending, `<p>ما التقطت خيارين واضحين من هالكلام. 🤖</p>
+            <p class="dim">جرّبي تكتبي كل خيار وجواها شي عنه — مثل: «الأولى قريبة والراتب متوسط، والثانية بعيدة بس الراتب أعلى».</p>`));
+          return;
+        }
+
+        const analyzed = await ask('analyze', {
+          title: parsed.data.title,
+          options: parsed.data.options,
+          criteria: parsed.data.criteria,
+        });
+        if (!analyzed.ok) {
+          // وصلنا للاستخراج بس التحليل فشل — ما بنضيّع كلام المستخدم
+          update(finish(pending, `<p>فهمت قرارك: <strong>${esc(parsed.data.title)}</strong>.</p>
+            <p class="dim">بس التحليل ما رجّع. جرّبي كمان مرة.</p>`,
+            { options: parsed.data.options, title: parsed.data.title }));
+          return;
+        }
+
+        ctx = { ...parsed.data, analysis: analyzed.data };
+        save(CTX_KEY, ctx);
+        update(finish(pending, card(analyzed.data)));
+      } else {
+        const reply = await ask('chat', {
+          text: t,
+          title: ctx.title,
+          options: ctx.options,
+          criteria: ctx.criteria,
+          analysis: ctx.analysis,
+        });
+        if (!reply.ok) { fail(pending, reply.msg); return; }
+
+        const d = reply.data;
+        let html = `<p>${txt(d.reply)}</p>`;
+        if ((d.insights || []).length) {
+          html += `<ul class="chat-insights">${d.insights.map((i) => `<li>${txt(i)}</li>`).join('')}</ul>`;
+        }
+        update(finish(pending, html));
+      }
+    } catch (err) {
+      fail(pending, 'صار خطأ غير متوقع. جرّبي كمان مرة.');
+      console.error(err);
+    } finally {
+      sending = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  function finish(pending, html) {
+    return { id: pending.id, role: 'ai', html };
+  }
+
+  function fail(pending, msg) {
+    update(finish(pending, `<p class="ai-err">${esc(msg || 'الخدمة مشغولة مؤقتاً.')}</p>`));
+  }
+
+  // ═══════════ الإدخال ═══════════
+
+  function autoGrow() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  }
+
+  input.addEventListener('input', autoGrow);
+  input.addEventListener('keydown', (e) => {
+    // Enter يرسل، Shift+Enter سطر جديد
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submit(input.value);
+    }
+  });
+  sendBtn.addEventListener('click', () => submit(input.value));
+  within(starters, '.starter').forEach((b) => {
+    b.addEventListener('click', () => submit(b.dataset.s));
+  });
+
+  document.addEventListener('DOMContentLoaded', initGate);
+})();

@@ -214,5 +214,79 @@ test('الـ prompt النظامي يمنع النصح', () => {
 console.log('\nاختبارات «قراراتي»\n' + '─'.repeat(40));
 console.log(results.join('\n'));
 console.log('─'.repeat(40));
+
+// ─── الشات: الاستخراج والتحليل ────────────────────────────────
+
+test('sanitizeResponse يحدّد الخيارات والمعايير من نص حرّ', () => {
+  const { data } = sanitizeResponse('parse', {
+    title: 'وظيفتين',
+    options: [{ name: 'قريبة', notes: 'راتب متوسط' }, { name: 'بعيدة', notes: 'راتب ممتاز' }],
+    criteria: [{ name: 'الراتب', weight: 9, scores: [5, 9] }],
+  });
+  if (data.title !== 'وظيفتين') fail('العنوان');
+  if (data.options.length !== 2) fail('عدد الخيارات');
+  if (data.criteria[0].name !== 'الراتب') fail('اسم المعيار');
+});
+
+test('parse يحدّ الأوزان والدرجات بين ٠ و ١٠', () => {
+  const { data } = sanitizeResponse('parse', {
+    title: 'x',
+    options: [{ name: 'أ' }, { name: 'ب' }],
+    criteria: [{ name: 'م', weight: 99, scores: [15, -4] }],
+  });
+  if (data.criteria[0].weight !== 10) fail('الوزن ما انحدّ');
+  if (data.criteria[0].scores[0] !== 10) fail('الدرجة العليا ما انحدّرت');
+  if (data.criteria[0].scores[1] !== 0) fail('الدرجة السالبة ما انعدّلت');
+});
+
+test('parse يرفض نص ما فيه قرار واضح', () => {
+  const { data } = sanitizeResponse('parse', { title: 'x', options: [], criteria: [] });
+  if (data.options.length !== 0) fail('اخترع خيار من فراغ');
+});
+
+test('analyze يمسح التوجيهية من كل حقل', () => {
+  const { data } = sanitizeResponse('analyze', {
+    summary: 'أنصحك بالأولى',
+    tradeoffs: [{ point: 'الراتب مقابل الوقت', detail: 'الأفضل أن تختاري الأولى', impacts: ['أ'] }],
+    decidingFactor: 'الأفضل هو الراتب',
+    decidingWhy: 'لأنها أفضل خيار',
+    question: 'أي خيار ستشتاق له؟',
+  });
+  if (data.summary.includes('أنصحك')) fail('الملخّص');
+  if (data.tradeoffs[0].detail.includes('الأفضل')) fail('التفاصيل');
+  if (data.decidingFactor.includes('الأفضل')) fail('نقطة الحسم');
+  if (data.decidingWhy.includes('أفضل')) fail('سبب الحسم');
+  if (!data.question.includes('تشتاق')) fail('السؤال الطاهر');
+});
+
+test('analyze يحافظ على عنوان المقايضة حتى لو التفاصيل اتمسحت', () => {
+  const { data } = sanitizeResponse('analyze', {
+    summary: 'ملخص نظيف تماماً',
+    tradeoffs: [{ point: 'الراتب مقابل الوقت', detail: 'اختاري الأولى', impacts: [] }],
+    decidingFactor: 'الراتب',
+    decidingWhy: 'لأنه ذكره مرتين في كلامه',
+    question: 'سؤال؟',
+  });
+  if (data.tradeoffs[0].point !== 'الراتب مقابل الوقت') fail('العنوان اتمسح');
+  if (data.tradeoffs[0].detail.includes('اختاري')) fail('التفاصيل ما انمسحت');
+});
+
+test('chat ينقّي الرد والرسائل', () => {
+  const { data } = sanitizeResponse('chat', {
+    reply: 'أنصحك تاخذي الأول',
+    question: 'اختاري بعناية',
+    insights: ['نقطة نظيفة', 'لو كنت مكانك'],
+  });
+  if (data.reply.includes('أنصحك')) fail('الرد');
+  if (data.question.includes('اختاري')) fail('السؤال');
+  if (data.insights.length !== 1) fail('نقطة ملوّثة ما انمسحت');
+});
+
+test('كل مهام الشات لها schema', () => {
+  for (const k of ['parse', 'analyze', 'chat']) {
+    if (!TASKS[k] || !TASKS[k].schema) fail(`مهمة الشات ${k} بلا schema`);
+  }
+});
+
 console.log(`نجح: ${pass}   فشل: ${fail}\n`);
-process.exit(fail === 0 ? 0 : 1);
+process.exit(fail ? 1 : 0);

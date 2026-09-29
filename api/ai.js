@@ -88,6 +88,13 @@ async function handle(req, res) {
     return reply(res, 400, { error: 'بيانات غير صالحة' });
   }
 
+  // الشات: المستخدم بيكتب بحرية، فلازم نحدّ حجم الطلب. بدون حد،
+  // حدا يقدر يبعت نص ضخم ويستهلك حصة المفتاح كله.
+  const size = JSON.stringify(payload).length;
+  if (size > 24_000) {
+    return reply(res, 413, { error: 'الرسالة طويلة جداً' });
+  }
+
   // التحقق من الرمز قبل أي اتصال بـ Google
   if (!checkPin(req.headers['x-pin'])) {
     return reply(res, 401, { error: 'الرمز غير صحيح' });
@@ -110,7 +117,7 @@ async function handle(req, res) {
       message:
         result.error === 'AI_NOT_CONFIGURED'
           ? 'الذكاء الاصطناعي غير مُفعّل حالياً.'
-          : 'الخدمة مشغولة مؤقتاً. جدول المقارنة يعمل بشكل كامل بدونها.',
+          : 'الخدمة مشغولة شوي. جرّبي كمان مرة، وأنا هون.',
     });
   }
 
