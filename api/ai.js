@@ -54,6 +54,22 @@ function checkPin(provided) {
 }
 
 module.exports = async function handler(req, res) {
+  try {
+    return await handle(req, res);
+  } catch (err) {
+    // لو في خطأ غير متوقع، نرجع رسالة مفهومة بدل 500 غامض
+    console.error('[handler] unexpected:', err);
+    try {
+      res.status(500).setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.end(JSON.stringify({ error: 'خطأ داخلي', detail: String(err && err.message || err) }));
+    } catch {
+      return res.end(JSON.stringify({ error: 'خطأ داخلي' }));
+    }
+  }
+};
+
+async function handle(req, res) {
   if (req.method !== 'POST') {
     return reply(res, 405, { error: 'استخدم POST فقط' });
   }
