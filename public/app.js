@@ -44,6 +44,12 @@ let editingId = null;
 // ═══════════ أدوات مساعدة ═══════════
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+// بنبحث جوه عنصر معيّن بدل الصفحة كلها — بنحتاجها لما نرسم
+// النتائج بمكان متغيّر (شاشة الإنشاء vs شاشة النتيجة).
+const within = (root, sel) => {
+  const el = typeof root === 'string' ? document.querySelector(root) : root;
+  return el ? el.querySelectorAll(sel) : [];
+};
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -278,7 +284,10 @@ function renderAI(task, data, out, onNew = false) {
           ${list.map((c) => `<button class="chip-add" data-add-crit="${esc(c)}">+ ${esc(c)}</button>`).join('')}
         </div>
       </div>`;
-    $$('#aiOut [data-add-crit]').forEach((btn) => {
+    // ⚠️ لازم نربط على الحاوية اللي رُسم فيها، مو على #aiOut الثابت.
+    //Proposal chips على شاشة الإنشاء بتنرسم بـ #newAiOut، فإذا ربطنا
+    // على #aiOut كانو بيظهروا بس ما في handler عليهم = 버튼 ميّت.
+    within(out, '[data-add-crit]').forEach((btn) => {
       btn.addEventListener('click', () => {
         addCriterion(btn.dataset.addCrit);
         btn.disabled = true;
