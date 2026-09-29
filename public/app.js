@@ -265,8 +265,8 @@ function bindMatrix() {
 
 // ═══════════ عرض نتائج الذكاء الاصطناعي ═══════════
 
-function renderAI(task, data) {
-  const out = $('#aiOut');
+function renderAI(task, data, out, onNew = false) {
+  if (!out) out = $('#aiOut');
 
   if (task === 'criteria') {
     const list = data.criteria || [];
@@ -283,7 +283,7 @@ function renderAI(task, data) {
         addCriterion(btn.dataset.addCrit);
         btn.disabled = true;
         btn.textContent = '✓ ' + btn.textContent.slice(2);
-        renderMatrix();
+        if (!onNew) renderMatrix();
         toast('تمت الإضافة');
       });
     });
@@ -327,8 +327,17 @@ function renderAI(task, data) {
 
 // ═══════════ استدعاء الذكاء الاصطناعي ═══════════
 
-async function callAI(task, payload, btn) {
-  const out = $('#aiOut');
+/**
+ * @param {string} task       اسم المهمة
+ * @param {object} payload    البيانات
+ * @param {Element} out       الحاوية اللي بنكتب فيها النتيجة
+ * @param {boolean} onNew     إذا كانت العملية على شاشة الإنشاء
+ */
+async function callAI(task, payload, out, onNew = false) {
+  // ليش الحاوية جايبة كمعامل: زر «اقتراح معايير» موجود على شاشة
+  // الإنشاء، وما في #aiOut هناك (دي بشاشة النتيجة). فلو كتبنا دايماً
+  // بـ $('#aiOut') كان الرد بينكتب بعنصر مخفي وما بتظهر النتيجة أبداً.
+
   const buttons = $$('[data-ai], #btnSuggest');
   buttons.forEach((b) => (b.disabled = true));
   busy(true, 'عم يفكّر… (حتى ٢٠ ثانية)');
@@ -354,15 +363,15 @@ async function callAI(task, payload, btn) {
       return;
     }
     if (json.ok) {
-      renderAI(task, json.data);
+      renderAI(task, json.data, out, onNew);
     } else {
-      showAIFail(out, json.message, task, payload);
+      showAIFail(out, json.message, task, payload, onNew);
     }
   } catch (err) {
     if (err && err.name === 'AbortError') {
-      showAIFail(out, 'الخدمة بطيئة اليوم. جدول المقارنة كامل وشغّال بدونها.', task, payload);
+      showAIFail(out, 'الخدمة بطيئة اليوم. جدول المقارنة كامل وشغّال بدونها.', task, payload, onNew);
     } else {
-      showAIFail(out, 'ما قدرنا نوصل للخدمة. تأكدي من الإنترنت.', task, payload);
+      showAIFail(out, 'ما قدرنا نوصل للخدمة. تأكدي من الإنترنت.', task, payload, onNew);
     }
   } finally {
     clearTimeout(kill);
@@ -376,13 +385,13 @@ async function callAI(task, payload, btn) {
  * وقتها بنعرض السبب الحقيقي للمستخدم مع زر لإعادة المحاولة،
  * بدل رسالة ميتة ما فيها حل.
  */
-function showAIFail(out, message, task, payload) {
+function showAIFail(out, message, task, payload, onNew = false) {
   out.innerHTML =
     '<div class="ai-err">' + esc(message || 'الخدمة مشغولة مؤقتاً.') + '</div>' +
     '<button class="ai-retry" data-retry="' + esc(task) + '">حاول تاني</button>';
   const btn = out.querySelector('[data-retry]');
   if (btn) {
-    btn.addEventListener('click', () => callAI(task, payload, btn));
+    btn.addEventListener('click', () => callAI(task, payload, out, onNew));
   }
 }
 
@@ -585,7 +594,7 @@ function init() {
       toast('اكتبي عنوان القرار أو الخيارات أولاً');
       return;
     }
-    callAI('criteria', buildPayload(), $('#btnSuggest'));
+    callAI('criteria', buildPayload(), $('#newAiOut'), true);
   });
 
   // تحويل لصفحة النتيجة
@@ -608,7 +617,7 @@ function init() {
   $$('[data-ai]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (state.criteria.length < 1) { toast('أضيفي معايير أولاً'); return; }
-      callAI(btn.dataset.ai, buildPayload(), btn);
+      callAI(btn.dataset.ai, buildPayload(), $('#aiOut'));
     });
   });
 

@@ -81,6 +81,7 @@
           <span class="dot"></span>اقتراح معايير ناقصة
         </button>
       </div>
+      <div id="newAiOut" class="ai-out"></div>
     </div>
 
     <div class="card">
@@ -156,7 +157,22 @@
 <script src="app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    // ?v=<رقم> كسر التخزين المؤقت لسوسيقى: بدونه، المتصفح بيحتفظ
+    // بنسخة sw.js القديمة وما بشوف تغييراتنا أبداً.
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js?v=2').then((reg) => {
+        // لو في نسخة جديدة، خبّر الـ worker يبلّش فوراً بدل ما ينتظر
+        // إغلاق كل التبويبات.
+        reg.addEventListener('updatefound', () => {
+          const sw = reg.installing;
+          if (sw) sw.addEventListener('statechange', () => {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              sw.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+      }).catch(() => {});
+    });
   }
 </script>
 </body>
