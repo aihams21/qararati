@@ -49,6 +49,8 @@ body {
 
 /* ═══════════ شريط علوي ═══════════ */
 .topbar {
+  /* الهيدر يضل ظاهر عند التمرير. scroll-margin تحت بيمنع أن
+     تختفي البطاقات اللي بنمرّر لها تحت هذا الهيدر. */
   position: sticky; top: 0; z-index: 40;
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 18px;
@@ -453,3 +455,6 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 }
 .ai-retry:hover { background: rgba(255, 255, 255, 0.06); }
 .ai-retry:disabled { opacity: 0.5; cursor: default; }
+
+/* لما نمرّر لعنصر، ما بيختفي تحت الهيدر اللاصق */
+.card, .ai-block, .ai-out { scroll-margin-top: 90px; }
