@@ -2,21 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "functions": {
-    "api/ai.js": {
-      "memory": 1024,
-      "maxDuration": 10
-    },
-    "api/health.js": {
-      "memory": 1024,
-      "maxDuration": 10
-    }
+    "api/ai.js":    { "memory": 1024, "maxDuration": 10 },
+    "api/health.js": { "memory": 1024, "maxDuration": 10 }
   },
   "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "no-store" }
-      ]
-    }
+    { "source": "/api/(.*)", "headers": [{ "key": "Cache-Control", "value": "no-store" }] }
   ]
 }
