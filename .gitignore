@@ -8,3 +8,4 @@ node_modules/
 # أسرار — لا ترفعها أبداً
 KEY.txt
 *.key
+.env*
