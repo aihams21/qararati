@@ -1,0 +1,13 @@
+{
+  "name": "qararati",
+  "version": "1.0.0",
+  "private": true,
+  "description": "قراراتي — تطبيق يساعد على ترتيب الخيارات ورؤية الفرق بوضوح، بدون أن يقرر أحد عنك",
+  "scripts": {
+    "dev": "node server.js",
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
