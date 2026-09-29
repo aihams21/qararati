@@ -331,13 +331,19 @@ async function callAI(task, payload, btn) {
   const out = $('#aiOut');
   const buttons = $$('[data-ai], #btnSuggest');
   buttons.forEach((b) => (b.disabled = true));
-  busy(true, 'ثواني بسيطة…');
+  busy(true, 'عم يفكّر… (حتى ٢٠ ثانية)');
+
+  // بنعطي المتصفح مهلة ٣٥ ثانية. لو ما رد، بنلغي الطلب بدل ما
+  // نخلي المستخدم يقعد ينطر على شاشة ما بتتغير.
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), 35000);
 
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-pin': PIN },
       body: JSON.stringify({ task, payload }),
+      signal: ctl.signal,
     });
     const json = await res.json();
 
@@ -350,13 +356,33 @@ async function callAI(task, payload, btn) {
     if (json.ok) {
       renderAI(task, json.data);
     } else {
-      out.innerHTML = '<div class="ai-err">' + esc(json.message || 'تعذّر الاتصال بالخدمة.') + '</div>';
+      showAIFail(out, json.message, task, payload);
     }
-  } catch {
-    out.innerHTML = '<div class="ai-err">ما قدرنا نوصل للخدمة. تأكدي من الإنترنت.</div>';
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      showAIFail(out, 'الخدمة بطيئة اليوم. جدول المقارنة كامل وشغّال بدونها.', task, payload);
+    } else {
+      showAIFail(out, 'ما قدرنا نوصل للخدمة. تأكدي من الإنترنت.', task, payload);
+    }
   } finally {
+    clearTimeout(kill);
     busy(false);
     buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+/**
+ * عند فشل الذكاء الاصطناعي: بنعرض الرسالة + زر «حاول تاني».
+ * وقتها بنعرض السبب الحقيقي للمستخدم مع زر لإعادة المحاولة،
+ * بدل رسالة ميتة ما فيها حل.
+ */
+function showAIFail(out, message, task, payload) {
+  out.innerHTML =
+    '<div class="ai-err">' + esc(message || 'الخدمة مشغولة مؤقتاً.') + '</div>' +
+    '<button class="ai-retry" data-retry="' + esc(task) + '">حاول تاني</button>';
+  const btn = out.querySelector('[data-retry]');
+  if (btn) {
+    btn.addEventListener('click', () => callAI(task, payload, btn));
   }
 }
 
@@ -552,44 +578,14 @@ function init() {
   });
 
   // اقتراح معايير أثناء الإنشاء
+  // نفس مسار callAI بالضبط — عشان الفشل يكون بنفس الشكل لكل المهام،
+  // ولما يفشل يقترح عليك تكتبي المعايير يدوي بدل ما يضل يقف.
   $('#btnSuggest').addEventListener('click', () => {
     if (!state.title && state.options.every((o) => !o.name)) {
       toast('اكتبي عنوان القرار أو الخيارات أولاً');
       return;
     }
-    const payload = buildPayload();
-    busy(true, 'ثواني بسيطة…');
-    fetch('/api/ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-pin': PIN },
-      body: JSON.stringify({ task: 'criteria', payload }),
-    })
-      .then((r) => r.json())
-      .then((j) => {
-        busy(false);
-        if (j.ok && j.data.criteria) {
-          // نضيفها كـ chips قبل قسم المعايير
-          const wrap = document.createElement('div');
-          wrap.className = 'ai-adds';
-          wrap.id = 'suggestChips';
-          wrap.innerHTML = j.data.criteria.map((c) =>
-            '<button class="chip-add" data-sug="' + esc(c) + '">+ ' + esc(c) + '</button>'
-          ).join('');
-          const critCard = $('#criteriaWrap').parentElement;
-          critCard.appendChild(wrap);
-          $$('#suggestChips [data-sug]').forEach((b) => {
-            b.addEventListener('click', () => {
-              addCriterion(b.dataset.sug);
-              b.disabled = true;
-              b.textContent = '✓ ' + b.textContent.slice(2);
-            });
-          });
-          toast('اضغطي على المعايير اللي بدك تضيفيها');
-        } else {
-          toast(j.message || 'ما قدرنا نقترح معايير الآن');
-        }
-      })
-      .catch(() => { busy(false); toast('ما قدرنا نوصل للخدمة'); });
+    callAI('criteria', buildPayload(), $('#btnSuggest'));
   });
 
   // تحويل لصفحة النتيجة
