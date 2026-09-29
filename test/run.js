@@ -4,12 +4,17 @@
 
 const assert = require('node:assert/strict');
 const { scoreAll, scoreOption, gap, sensitivity, clamp, completeness } = require('../lib/scoring');
-const { isContaminated, sanitizeText, sanitizeResponse } = require('../lib/filter');
+const { isContaminated, sanitizeText, sanitizeResponse, isEvasive } = require('../lib/filter');
 const { buildPrompt, TASKS } = require('../lib/prompts');
 
 let pass = 0;
-let fail = 0;
+let failed = 0;
 const results = [];
+
+/** يوثّق سبب الفشل بدل ما يرمي استثناء */
+function fail(reason) {
+  throw new Error(reason || 'فشل');
+}
 
 function test(name, fn) {
   try {
@@ -17,7 +22,7 @@ function test(name, fn) {
     pass++;
     results.push(`  ✓ ${name}`);
   } catch (err) {
-    fail++;
+    failed++;
     results.push(`  ✗ ${name}\n      ${err.message}`);
   }
 }
@@ -288,5 +293,110 @@ test('كل مهام الشات لها schema', () => {
   }
 });
 
-console.log(`نجح: ${pass}   فشل: ${fail}\n`);
-process.exit(fail ? 1 : 0);
+// ─── طبقة الجودة: رفض الردود المهرِّبة ──────────────────────
+
+test('isEvasive يرفض عبارات التهرّب', () => {
+  for (const t of [
+    'بقدر تقرر بنفسك',
+    'الأمر بيعتمد عليك',
+    'فكري فيها شوي',
+    'ما في إجابة صح',
+    'بالتوفيق',
+  ]) {
+    if (!isEvasive(t)) fail(`لم يُرفض: ${t}`);
+  }
+});
+
+test('isEvasive يقبل رداً غنياً', () => {
+  const rich = 'الراتب أعلى بنسبة ٤٠٪ لكنه يتطلب ساعتين تنقل يومياً. على مدى خمس سنوات ' +
+    'يعني حوالي  ٥٠٠ ساعة في الطريق. لو هالوقت بيروح على شغل ثانٍ أو على راحة، ' +
+    'المقارنة بتتغيّر تماماً.';
+  if (isEvasive(rich)) fail('رُفض رد غني');
+});
+
+test('isEvasive يرفض الرد الفاضي', () => {
+  if (!isEvasive('')) fail('الرد الفاضي مرّ');
+  if (!isEvasive('   ')) fail('المسافات مرّت');
+});
+
+test('table ينقّي الدرجات والملاحظات', () => {
+  const { data } = sanitizeResponse('table', {
+    rows: [{ criterion: 'الراتب', weight: 12, cells: [{ score: 9, note: 'أنصحك فيها' }] }],
+    verdict: 'الأفضل الأول',
+  });
+  if (data.rows[0].weight !== 10) fail('الوزن ما انحدّ');
+  if (data.rows[0].cells[0].note.includes('أنصحك')) fail('الملاحظة ما انمسحت');
+  if (data.verdict.includes('الأفضل')) fail('الخلاصة ما انمسحت');
+});
+
+test('table يحذف الصفوف بلا خانات', () => {
+  const { data } = sanitizeResponse('table', {
+    rows: [{ criterion: 'فارغ', cells: [] }, { criterion: 'مفيد', cells: [{ score: 5 }] }],
+  });
+  if (data.rows.length !== 1) fail('صف فاضي ما انحذف');
+});
+
+test('مهمة table موجودة بـ schema', () => {
+  if (!TASKS.table || !TASKS.table.schema) fail('مهمة table ناقصة');
+});
+
+test('buildPrompt يضع تعزيز إعادة المحاولة فقط عند الطلب', () => {
+  const normal = buildPrompt('chat', { t: 1 });
+  const retry = buildPrompt('chat', { t: 1 }, { retry: true });
+  if (normal.contents[0].parts[0].text.includes('رُفض')) fail('تعزيز بدون إعادة');
+  if (!retry.contents[0].parts[0].text.includes('رُفض')) fail('ما في تعزيز عند الإعادة');
+});
+
+test('سقف الرموز كافي للتحليل الكامل', () => {
+  const b = buildPrompt('analyze', {});
+  if (b.generationConfig.maxOutputTokens < 4096) fail('السقف مازال صغير — بيقطع الرد');
+  if (!b.generationConfig.thinkingConfig) fail('ما في تفكير قبل الرد');
+  if (b.thinkingConfig) fail('thinkingConfig بالمستوى الخطأ — Gemini بيرجّع 400');
+});
+
+test('كل المهام معها تعزيز متاح', () => {
+  for (const k of Object.keys(TASKS)) {
+    buildPrompt(k, {}, { retry: true });
+  }
+});
+
+
+// ─── تقسية الجمل: جملة توجيهيه ما تسقط الرد كامل ─────────────
+
+test('sanitizeResponse(chat) يحافظ على جمل الرد النظيفة', () => {
+  const { data, notes } = sanitizeResponse('chat', {
+    reply: 'أنصحك بالأولى. الراتب التفاضلي ٤٠٪ لكن التنقل ساعتان يومياً. الجملة الأخيرة مهمة.',
+    question: 'ما هو الحد الأدنى؟',
+    insights: ['نقطة'],
+  });
+  if (data.reply.includes('أنصحك')) fail('الجملة التوجيهية ما انمسحت');
+  if (!data.reply.includes('٤٠٪')) fail('الجملة النظيفة اتمسحت زائد');
+  if (notes.length === 0) fail('ما سجّلنا التنبيه');
+});
+
+test('chat يستعمل النقاط لما الرد كله ملوّث', () => {
+  const { data } = sanitizeResponse('chat', {
+    reply: 'أنصحك بالأولى وهي الأفضل بلا شك',
+    question: 'سؤال؟',
+    insights: ['الراتب أعلى بنسبة ٤٠٪ مما ذكرته', 'التنقل يستهلك ساعتين يومياً من وقتك'],
+  });
+  if (data.reply.includes('أنصحك')) fail('ما زال فيه توجيه');
+  if (!data.reply.includes('٤٠٪')) fail('ما استعملنا النقاط');
+});
+
+test('chat يبلّغ عن الرد الفاضي بدل ما يخبّي المشكلة', () => {
+  // كل شي اتمسح — ما في نقاط نظيفة. لازم يطلع تنبيه عشان api/ai.js
+  // يعيد المحاولة، مش يعرض «وصلتني رسالتك» كأنها إجابة.
+  const { data, notes } = sanitizeResponse('chat', {
+    reply: 'أنصحك كذا',
+    question: '',
+    insights: [],
+  });
+  if (data.reply !== '') fail('رجّع نص فاضي');
+  if (!notes.some((n) => n.includes('اتمسح'))) fail('ما نبّه إن الرد اتمسح');
+});
+
+
+results.forEach((r)=>console.log(r));
+console.log(`نجح: ${pass}   فشل: ${failed}\n`);
+process.exit(failed ? 1 : 0);

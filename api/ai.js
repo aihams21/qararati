@@ -8,7 +8,7 @@
 const crypto = require('crypto');
 const { runTask } = require('../lib/gemini');
 const { buildPrompt, TASKS } = require('../lib/prompts');
-const { sanitizeResponse } = require('../lib/filter');
+const { sanitizeResponse, isEvasive } = require('../lib/filter');
 
 // حد بسيط: ٢٠ طلب لكل IP في الدقيقة — يمنع أي استهلاك عشوائي للمفتاح
 const RATE_LIMIT = 20;
@@ -69,6 +69,38 @@ module.exports = async function handler(req, res) {
   }
 };
 
+/**
+ * هل الرد ضعيف لدرجة إنه ما بيستاهل يوصل للمستخدم؟
+ * المهمة الثابتة (table) ما بتحتاج فحص — الجدول إما موجود أو لأ.
+ */
+function needsBetter(task, data, cleaned = null) {
+  // النص بعد التنقية هو اللي رح يوصل للمستخدم — هو اللي بنحكم عليه
+  const out = cleaned || data;
+  if (task === 'table') {
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    return rows.length < 2;
+  }
+  if (task === 'parse') {
+    const opts = Array.isArray(data?.options) ? data.options : [];
+    const crit = Array.isArray(data?.criteria) ? data.criteria : [];
+    // قرار حقيقي = خياران على الأقل + معياران على الأقل
+    return opts.length < 2 || crit.length < 2;
+  }
+  if (task === 'analyze') {
+    const t = Array.isArray(data?.tradeoffs) ? data.tradeoffs : [];
+    const problem = isEvasive(data?.summary);
+    return t.length < 2 || !!problem;
+  }
+  if (task === 'chat') {
+    // نفحص النص المنقّى: لو رجع فارغ بعد ما شلنا التوجيهية،
+    // المستخدم رح يقرأ فراغ — لازم نعيد المحاولة.
+    if (!String(out?.reply || '').trim()) return true;
+    const insights = Array.isArray(out?.insights) ? out.insights : [];
+    return insights.length < 2;
+  }
+  return false;
+}
+
 async function handle(req, res) {
   if (req.method !== 'POST') {
     return reply(res, 405, { error: 'استخدم POST فقط' });
@@ -107,7 +139,32 @@ async function handle(req, res) {
     return reply(res, 400, { error: 'تعذّر بناء الطلب' });
   }
 
-  const result = await runTask(process.env.GEMINI_API_KEY, body);
+  // ─── طبقة الجودة: لو الرد مهرّب، نطلب من الموديل يعيد المحاولة ───
+  // السبب: الموديل أحياناً بيرد «الأمر بيعتمد عليك» حتى مع برومبت
+  // قوي. ردة فعلنا الوحيدة هي إعادة الطلب مع تعزيز، مش عرض كلام فاضي.
+  let result = await runTask(process.env.GEMINI_API_KEY, body);
+  let retried = false;
+
+  // نحتاج جولتين لأن التنقية ممكن تفرّغ الرد: الموديل يجي بفقرة فيها
+  // جملة توجيهية، والفلتر يشيلها، فتبقى فاضية. لازم ننبّه needsBetter
+  // على النتيجة **بعد** التنقية مش قبلها.
+  for (let round = 0; round < 2; round++) {
+    if (!result.ok) break;
+
+    const cleaned = sanitizeResponse(task, result.data).data;
+    if (!needsBetter(task, result.data, cleaned)) break;
+
+    retried = true;
+    console.warn(`[ai] ${task}: الرد ضعيف (جولة ${round + 1})، بنعيد المحاولة`);
+
+    const second = await runTask(process.env.GEMINI_API_KEY, buildPrompt(task, payload, { retry: true }));
+    if (!second.ok) {
+      // المحاولة فشلت — نرجع الأفضل بين اللي عندنا
+      console.error(`[ai] ${task}: إعادة المحاولة فشلت، بنرجع الرد الأصلي`);
+      break;
+    }
+    result = second;
+  }
 
   if (!result.ok) {
     // 200 مع رسالة لطيفة: الواجهة بتعرف تعرض بديل محلي بدين تعمل كراش
@@ -128,5 +185,5 @@ async function handle(req, res) {
     console.warn(`[ai] ${task}: نُظّف الرد →`, notes.join(' | '));
   }
 
-  return reply(res, 200, { ok: true, task, data });
+  return reply(res, 200, { ok: true, task, data, retried });
 };

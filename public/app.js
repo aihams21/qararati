@@ -251,6 +251,49 @@
       </div>`;
   }
 
+  // ═══════════ جدول المقارنة ═══════════
+
+  /**
+   * جدول معيار × خيار. نرسمه بأعمدة ثابتة لأن الأسماء أطوال مختلفة.
+   * scores صفر مع note «ما ذكره» = معلومة ناقصة، مش درجة صفر.
+   */
+  function table(t, options) {
+    if (!t || !t.rows || !t.rows.length) return '';
+
+    const head = options.map((o) => `<th>${txt(o.name)}</th>`).join('');
+
+    const rows = t.rows.map((r) => {
+      const cells = (r.cells || []).map((c) => {
+        const unknown = c.note === 'ما ذكره';
+        const bar = `<i style="width:${Math.max(4, (c.score / 10) * 100)}%"></i>`;
+        return `<td>
+          <span class="cell-score${unknown ? ' unknown' : ''}">${unknown ? '—' : c.score}<em>/10</em></span>
+          <span class="cell-bar">${bar}</span>
+          ${c.note && !unknown ? `<span class="cell-note">${txt(c.note)}</span>` : ''}
+        </td>`;
+      }).join('');
+
+      return `<tr>
+        <th class="rowhead">
+          <span class="rw-name">${txt(r.criterion)}</span>
+          <span class="rw-weight">وزن ${r.weight}</span>
+        </th>
+        ${cells}
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="atable">
+        <div class="atable-scroll">
+          <table>
+            <thead><tr><th class="rowhead">المعيار</th>${head}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${t.verdict ? `<p class="atable-verdict">${txt(t.verdict)}</p>` : ''}
+      </div>`;
+  }
+
   // ═══════════ الاتصال بالموديل ═══════════
 
   async function ask(task, payload) {
@@ -329,9 +372,37 @@
           return;
         }
 
-        ctx = { ...parsed.data, analysis: analyzed.data };
+        // الجدول طلب منفصل — لو فشل، البطاقة بتفضل تطلع. الفصل
+  // بيخلّي فشل جزء ما يطيّح الكل.
+        const tab = await ask('table', {
+          options: parsed.data.options,
+          criteria: parsed.data.criteria,
+          title: parsed.data.title,
+        });
+
+        ctx = {
+          ...parsed.data,
+          analysis: analyzed.data,
+          table: tab.ok ? tab.data : null,
+        };
         save(CTX_KEY, ctx);
-        update(finish(pending, card(analyzed.data)));
+
+        const tableNote = tab.ok
+          ? ''
+          : '<p class="dim">الجدول ما رجّع هالمرة. بتقدري تطلبي «حدّث الجدول» تحت.</p>';
+
+        update(finish(pending, table(tab.ok ? tab.data : null, parsed.data.options) + card(analyzed.data) + tableNote));
+      } else if (/^(جدول|حدّث الجدول|حدث الجدول|table)/.test(t) && ctx.options) {
+        // أمر صريح: أعِد بناء الجدول بلا ما تصرف رد على الكلمة
+        const tab = await ask('table', {
+          options: ctx.options,
+          criteria: ctx.criteria,
+          title: ctx.title,
+        });
+        if (!tab.ok) { fail(pending, tab.msg); return; }
+        ctx.table = tab.data;
+        save(CTX_KEY, ctx);
+        update(finish(pending, table(tab.data, ctx.options)));
       } else {
         const reply = await ask('chat', {
           text: t,
